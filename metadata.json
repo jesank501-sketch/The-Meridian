@@ -1,0 +1,6 @@
+{
+  "name": "The Meridian Dispatch",
+  "description": "International dynamic digital newspaper and editorial publishing platform with real-time visual site builder, role-based newsroom workflow, media library, and live analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

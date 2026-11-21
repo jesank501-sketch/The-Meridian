@@ -1,0 +1,27 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidAsset() {
+      return request.resource != null
+        && request.resource.size <= 25 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/(jpeg|png|webp|gif|svg\\+xml)')
+          || request.resource.contentType.matches('video/(mp4|webm)')
+        );
+    }
+
+    match /media/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.uid == userId && isValidAsset();
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

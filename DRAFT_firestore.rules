@@ -1,0 +1,606 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Reusable Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == 'jesank501@gmail.com';
+    }
+
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isUserActive() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isActive == true;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || (isSignedIn() && userDocExists() && isUserActive() && getUserRole() == 'Super Admin');
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || (isSignedIn() && userDocExists() && isUserActive() && getUserRole() in ['Super Admin', 'Administrator']);
+    }
+
+    function isEditor() {
+      return isAdmin() || (isSignedIn() && userDocExists() && isUserActive() && getUserRole() == 'Editor');
+    }
+
+    function isEditorialStaff() {
+      return isEditor() || (isSignedIn() && userDocExists() && isUserActive() && getUserRole() in ['Reporter', 'Author']);
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidSlug(slug) {
+      return slug is string && slug.size() >= 1 && slug.size() <= 200 && slug.matches('^[a-z0-9\\-]+$');
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'bio', 'title', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1000))
+        && data.role in ['Super Admin', 'Administrator', 'Editor', 'Reporter', 'Author', 'Subscriber']
+        && (!('bio' in data) || (data.bio is string && data.bio.size() <= 500))
+        && (!('title' in data) || (data.title is string && data.title.size() <= 100))
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNews(data) {
+      return data.keys().hasAll([
+          'title', 'slug', 'excerpt', 'contentHtml', 'categoryId', 'categoryName', 'categorySlug',
+          'authorId', 'authorName', 'status', 'isBreaking', 'isFeatured', 'isTrending', 'viewsCount',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'slug', 'excerpt', 'contentHtml', 'featuredImage', 'imageCaption', 'imageCredit',
+          'galleryImages', 'youtubeUrl', 'categoryId', 'categoryName', 'categorySlug', 'tagNames',
+          'authorId', 'authorName', 'reporterName', 'status', 'isBreaking', 'isFeatured', 'isTrending',
+          'isVideoNews', 'isPhotoGallery', 'viewsCount', 'readTimeMinutes', 'seoTitle', 'seoDescription',
+          'seoKeywords', 'ogImage', 'canonicalUrl', 'publishedAt', 'scheduledFor', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 240
+        && isValidSlug(data.slug)
+        && data.excerpt is string && data.excerpt.size() >= 1 && data.excerpt.size() <= 600
+        && data.contentHtml is string && data.contentHtml.size() >= 1 && data.contentHtml.size() <= 250000
+        && (!('featuredImage' in data) || (data.featuredImage is string && data.featuredImage.size() <= 2000))
+        && (!('imageCaption' in data) || (data.imageCaption is string && data.imageCaption.size() <= 300))
+        && (!('imageCredit' in data) || (data.imageCredit is string && data.imageCredit.size() <= 200))
+        && (!('galleryImages' in data) || (data.galleryImages is list && data.galleryImages.size() <= 12 && (data.galleryImages.size() == 0 || data.galleryImages[0] is string)))
+        && (!('youtubeUrl' in data) || (data.youtubeUrl is string && data.youtubeUrl.size() <= 500))
+        && isValidId(data.categoryId)
+        && data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 100
+        && isValidSlug(data.categorySlug)
+        && (!('tagNames' in data) || (data.tagNames is list && data.tagNames.size() <= 10 && (data.tagNames.size() == 0 || data.tagNames[0] is string)))
+        && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+        && (!('reporterName' in data) || (data.reporterName is string && data.reporterName.size() <= 120))
+        && data.status in ['draft', 'published', 'scheduled', 'archived']
+        && data.isBreaking is bool
+        && data.isFeatured is bool
+        && data.isTrending is bool
+        && (!('isVideoNews' in data) || data.isVideoNews is bool)
+        && (!('isPhotoGallery' in data) || data.isPhotoGallery is bool)
+        && data.viewsCount is number && data.viewsCount >= 0
+        && (!('readTimeMinutes' in data) || (data.readTimeMinutes is number && data.readTimeMinutes >= 1 && data.readTimeMinutes <= 120))
+        && (!('seoTitle' in data) || (data.seoTitle is string && data.seoTitle.size() <= 160))
+        && (!('seoDescription' in data) || (data.seoDescription is string && data.seoDescription.size() <= 320))
+        && (!('seoKeywords' in data) || (data.seoKeywords is string && data.seoKeywords.size() <= 300))
+        && (!('ogImage' in data) || (data.ogImage is string && data.ogImage.size() <= 2000))
+        && (!('canonicalUrl' in data) || (data.canonicalUrl is string && data.canonicalUrl.size() <= 1000))
+        && (!('publishedAt' in data) || data.publishedAt is timestamp || data.publishedAt == null)
+        && (!('scheduledFor' in data) || data.scheduledFor is timestamp || data.scheduledFor == null)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['name', 'slug', 'order', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'slug', 'description', 'imageUrl', 'parentId', 'order', 'isActive', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 80
+        && isValidSlug(data.slug)
+        && (!('description' in data) || (data.description is string && data.description.size() <= 400))
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000))
+        && (!('parentId' in data) || (data.parentId is string && data.parentId.size() <= 128))
+        && data.order is number && data.order >= 0 && data.order <= 10000
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTag(data) {
+      return data.keys().hasAll(['name', 'slug', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'slug', 'description', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+        && isValidSlug(data.slug)
+        && (!('description' in data) || (data.description is string && data.description.size() <= 250))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMedia(data) {
+      return data.keys().hasAll(['title', 'fileName', 'url', 'mimeType', 'sizeBytes', 'uploadedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'fileName', 'url', 'storagePath', 'mimeType', 'sizeBytes', 'altText', 'caption', 'uploadedBy', 'uploaderName', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 200
+        && data.url is string && data.url.size() >= 1 && data.url.size() <= 2000
+        && (!('storagePath' in data) || (data.storagePath is string && data.storagePath.size() <= 500))
+        && data.mimeType is string && data.mimeType.size() >= 3 && data.mimeType.size() <= 100
+        && data.sizeBytes is number && data.sizeBytes >= 0 && data.sizeBytes <= 52428800
+        && (!('altText' in data) || (data.altText is string && data.altText.size() <= 300))
+        && (!('caption' in data) || (data.caption is string && data.caption.size() <= 400))
+        && isValidId(data.uploadedBy)
+        && (!('uploaderName' in data) || (data.uploaderName is string && data.uploaderName.size() <= 120))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWebsiteSettings(data) {
+      return data.keys().hasAll(['siteName', 'updatedAt'])
+        && data.keys().hasOnly(['siteName', 'tagline', 'contactEmail', 'contactPhone', 'address', 'editionLabel', 'seoTitle', 'seoDescription', 'seoKeywords', 'ogImage', 'canonicalBaseUrl', 'robotsTxt', 'socialLinks', 'updatedAt'])
+        && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 120
+        && (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 240))
+        && (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 254))
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 40))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 300))
+        && (!('editionLabel' in data) || (data.editionLabel is string && data.editionLabel.size() <= 80))
+        && (!('seoTitle' in data) || (data.seoTitle is string && data.seoTitle.size() <= 160))
+        && (!('seoDescription' in data) || (data.seoDescription is string && data.seoDescription.size() <= 320))
+        && (!('seoKeywords' in data) || (data.seoKeywords is string && data.seoKeywords.size() <= 400))
+        && (!('ogImage' in data) || (data.ogImage is string && data.ogImage.size() <= 2000))
+        && (!('canonicalBaseUrl' in data) || (data.canonicalBaseUrl is string && data.canonicalBaseUrl.size() <= 500))
+        && (!('robotsTxt' in data) || (data.robotsTxt is string && data.robotsTxt.size() <= 2000))
+        && (!('socialLinks' in data) || data.socialLinks is map)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDesignSettings(data) {
+      return data.keys().hasAll(['header', 'theme', 'cards', 'sidebar', 'footer', 'updatedAt'])
+        && data.keys().hasOnly(['header', 'theme', 'cards', 'sidebar', 'footer', 'updatedBy', 'updatedAt'])
+        && data.header is map
+        && data.theme is map
+        && data.cards is map
+        && data.sidebar is map
+        && data.footer is map
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHomepageSection(data) {
+      return data.keys().hasAll(['title', 'sectionType', 'layout', 'articleLimit', 'isVisible', 'order', 'scope', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'sectionType', 'categorySlug', 'layout', 'articleLimit', 'backgroundColor', 'isVisible', 'order', 'scope', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.sectionType in ['hero', 'featured', 'latest', 'category', 'gallery', 'video', 'popular', 'trending', 'newsletter', 'ad_banner']
+        && (!('categorySlug' in data) || (data.categorySlug is string && data.categorySlug.size() <= 100))
+        && data.layout in ['grid', 'list', 'magazine', 'hero_split', 'carousel']
+        && data.articleLimit is number && data.articleLimit >= 1 && data.articleLimit <= 24
+        && (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 40))
+        && data.isVisible is bool
+        && data.order is number && data.order >= 0 && data.order <= 1000
+        && data.scope in ['published', 'draft']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNavigationMenu(data) {
+      return data.keys().hasAll(['label', 'url', 'location', 'order', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['label', 'url', 'location', 'order', 'openInNewTab', 'isActive', 'updatedAt'])
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 60
+        && data.url is string && data.url.size() >= 1 && data.url.size() <= 500
+        && data.location in ['header', 'footer_col1', 'footer_col2', 'topbar']
+        && data.order is number && data.order >= 0 && data.order <= 1000
+        && (!('openInNewTab' in data) || data.openInNewTab is bool)
+        && data.isActive is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertisement(data) {
+      return data.keys().hasAll(['title', 'placement', 'adType', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'placement', 'adType', 'imageUrl', 'targetUrl', 'adsenseClientId', 'adsenseSlotId', 'startDate', 'endDate', 'isActive', 'clicks', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.placement in ['header', 'homepage_banner', 'sidebar', 'article', 'footer']
+        && data.adType in ['image', 'adsense']
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 2000))
+        && (!('targetUrl' in data) || (data.targetUrl is string && data.targetUrl.size() <= 1000))
+        && (!('adsenseClientId' in data) || (data.adsenseClientId is string && data.adsenseClientId.size() <= 60))
+        && (!('adsenseSlotId' in data) || (data.adsenseSlotId is string && data.adsenseSlotId.size() <= 60))
+        && (!('startDate' in data) || (data.startDate is string && data.startDate.size() <= 40))
+        && (!('endDate' in data) || (data.endDate is string && data.endDate.size() <= 40))
+        && data.isActive is bool
+        && (!('clicks' in data) || (data.clicks is number && data.clicks >= 0))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPage(data) {
+      return data.keys().hasAll(['title', 'slug', 'contentHtml', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'slug', 'contentHtml', 'seoTitle', 'seoDescription', 'status', 'showInFooter', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && isValidSlug(data.slug)
+        && data.contentHtml is string && data.contentHtml.size() <= 200000
+        && (!('seoTitle' in data) || (data.seoTitle is string && data.seoTitle.size() <= 160))
+        && (!('seoDescription' in data) || (data.seoDescription is string && data.seoDescription.size() <= 320))
+        && data.status in ['published', 'draft']
+        && (!('showInFooter' in data) || data.showInFooter is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['newsId', 'authorName', 'content', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['newsId', 'newsTitle', 'authorName', 'userId', 'content', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.newsId)
+        && (!('newsTitle' in data) || (data.newsTitle is string && data.newsTitle.size() <= 240))
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128 && (data.userId == '' || (isSignedIn() && data.userId == request.auth.uid))))
+        && data.content is string && data.content.size() >= 2 && data.content.size() <= 2000
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubscriber(data) {
+      return data.keys().hasAll(['email', 'status', 'subscribedAt', 'updatedAt'])
+        && data.keys().hasOnly(['email', 'name', 'status', 'subscribedAt', 'updatedAt'])
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 254 && data.email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')
+        && (!('name' in data) || (data.name is string && data.name.size() <= 100))
+        && data.status in ['active', 'unsubscribed']
+        && data.subscribedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnalyticsEvent(data) {
+      return data.keys().hasAll(['dateKey', 'visitorId', 'path', 'createdAt'])
+        && data.keys().hasOnly(['dateKey', 'visitorId', 'newsId', 'path', 'createdAt'])
+        && data.dateKey is string && data.dateKey.size() == 10 && data.dateKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.visitorId is string && data.visitorId.size() >= 4 && data.visitorId.size() <= 128
+        && (!('newsId' in data) || (data.newsId is string && data.newsId.size() <= 128))
+        && data.path is string && data.path.size() >= 1 && data.path.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['userId', 'userName', 'action', 'entityType', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'userName', 'userRole', 'action', 'entityType', 'entityId', 'details', 'createdAt'])
+        && isValidId(data.userId)
+        && data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 120
+        && (!('userRole' in data) || (data.userRole is string && data.userRole.size() <= 40))
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 80
+        && data.entityType is string && data.entityType.size() >= 1 && data.entityType.size() <= 60
+        && (!('entityId' in data) || (data.entityId is string && data.entityId.size() <= 128))
+        && (!('details' in data) || (data.details is string && data.details.size() <= 500))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidContactMessage(data) {
+      return data.keys().hasAll(['name', 'email', 'subject', 'message', 'status', 'createdAt'])
+        && data.keys().hasOnly(['name', 'email', 'subject', 'message', 'status', 'createdAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 254
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 200
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 4000
+        && data.status in ['new', 'read', 'archived']
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Staff Invites (Admin-issued role pre-assignments by email)
+    match /staffInvites/{inviteId} {
+      allow get: if isValidId(inviteId) && (isAdmin() || (isSignedIn() && resource.data.email == request.auth.token.email));
+      allow list: if isAdmin();
+      allow create, update: if isValidId(inviteId)
+        && isAdmin()
+        && incoming().keys().hasAll(['email', 'role', 'invitedBy', 'createdAt'])
+        && incoming().keys().hasOnly(['email', 'role', 'invitedBy', 'createdAt'])
+        && incoming().email is string && incoming().email.size() >= 5 && incoming().email.size() <= 254
+        && incoming().role in ['Administrator', 'Editor', 'Reporter', 'Author']
+        && isValidId(incoming().invitedBy)
+        && incoming().createdAt == request.time;
+      allow delete: if isValidId(inviteId) && (isAdmin() || (isSignedIn() && resource.data.email == request.auth.token.email));
+    }
+
+    // Users (Strict PII Isolation & Anti-Self-Escalation)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isValidId(userId)
+        && isSignedIn()
+        && isValidUser(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            isOwner(userId)
+            && incoming().uid == request.auth.uid
+            && incoming().email == request.auth.token.email
+            && (
+              (isBootstrappedSuperAdmin() && incoming().role == 'Super Admin')
+              || (!isBootstrappedSuperAdmin() && incoming().role == 'Subscriber')
+            )
+          )
+        );
+      allow update: if isValidId(userId)
+        && isSignedIn()
+        && isValidUser(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && (
+          (isSuperAdmin() && (!('role' in existing()) || existing().role != 'Super Admin' || isOwner(userId)))
+          || (isAdmin() && existing().role != 'Super Admin' && incoming().role != 'Super Admin')
+          || (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'title', 'updatedAt']))
+        );
+      allow delete: if isValidId(userId) && isSuperAdmin() && !isOwner(userId);
+    }
+
+    // News Articles
+    match /news/{newsId} {
+      allow get: if isValidId(newsId) && (resource.data.status == 'published' || isEditorialStaff());
+      allow list: if resource.data.status == 'published' || isEditorialStaff();
+      allow create: if isValidId(newsId)
+        && isEditorialStaff()
+        && isValidNews(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (exists(/databases/$(database)/documents/categories/$(incoming().categoryId)) || existsAfter(/databases/$(database)/documents/categories/$(incoming().categoryId)))
+        && (isEditor() || incoming().status in ['draft', 'published', 'scheduled']);
+      allow update: if isValidId(newsId)
+        && isValidNews(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().authorId == existing().authorId
+        && (
+          // Action: Reader view increment (+1 only on published article)
+          (
+            existing().status == 'published'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount'])
+            && incoming().viewsCount == existing().viewsCount + 1
+          )
+          // Action: Editorial staff update
+          || (
+            isEditorialStaff()
+            && incoming().updatedAt == request.time
+            && (isEditor() || existing().authorId == request.auth.uid)
+          )
+        );
+      allow delete: if isValidId(newsId) && (isEditor() || (isEditorialStaff() && existing().authorId == request.auth.uid));
+    }
+
+    // Categories
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId) && (resource.data.isActive == true || isEditorialStaff());
+      allow list: if resource.data.isActive == true || isEditorialStaff();
+      allow create: if isValidId(categoryId)
+        && isEditor()
+        && isValidCategory(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(categoryId)
+        && isEditor()
+        && isValidCategory(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(categoryId) && isEditor();
+    }
+
+    // Tags
+    match /tags/{tagId} {
+      allow get: if isValidId(tagId);
+      allow list: if true;
+      allow create: if isValidId(tagId)
+        && isEditor()
+        && isValidTag(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(tagId)
+        && isEditor()
+        && isValidTag(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(tagId) && isEditor();
+    }
+
+    // Media Library
+    match /media/{mediaId} {
+      allow get: if isValidId(mediaId) && isEditorialStaff();
+      allow list: if isEditorialStaff();
+      allow create: if isValidId(mediaId)
+        && isEditorialStaff()
+        && isValidMedia(incoming())
+        && incoming().uploadedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(mediaId)
+        && isEditorialStaff()
+        && isValidMedia(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().uploadedBy == existing().uploadedBy
+        && incoming().updatedAt == request.time
+        && (isEditor() || existing().uploadedBy == request.auth.uid);
+      allow delete: if isValidId(mediaId) && (isEditor() || (isEditorialStaff() && existing().uploadedBy == request.auth.uid));
+    }
+
+    // Website Settings
+    match /websiteSettings/{settingId} {
+      allow get: if isValidId(settingId) && (settingId == 'global' || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isValidId(settingId)
+        && isAdmin()
+        && isValidWebsiteSettings(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Design Settings (published, draft, previous)
+    match /designSettings/{designId} {
+      allow get: if isValidId(designId) && (designId == 'published' || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isValidId(designId)
+        && isAdmin()
+        && isValidDesignSettings(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Homepage Sections
+    match /homepageSections/{sectionId} {
+      allow get: if isValidId(sectionId) && (resource.data.scope == 'published' || isEditor());
+      allow list: if resource.data.scope == 'published' || isEditor();
+      allow create, update: if isValidId(sectionId)
+        && isEditor()
+        && isValidHomepageSection(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(sectionId) && isEditor();
+    }
+
+    // Navigation Menus
+    match /navigationMenus/{menuId} {
+      allow get: if isValidId(menuId) && (resource.data.isActive == true || isAdmin());
+      allow list: if resource.data.isActive == true || isAdmin();
+      allow create, update: if isValidId(menuId)
+        && isAdmin()
+        && isValidNavigationMenu(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(menuId) && isAdmin();
+    }
+
+    // Advertisements
+    match /advertisements/{adId} {
+      allow get: if isValidId(adId) && (resource.data.isActive == true || isAdmin());
+      allow list: if resource.data.isActive == true || isAdmin();
+      allow create: if isValidId(adId)
+        && isAdmin()
+        && isValidAdvertisement(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(adId)
+        && isValidAdvertisement(incoming())
+        && incoming().createdAt == existing().createdAt
+        && (
+          (existing().isActive == true && incoming().diff(existing()).affectedKeys().hasOnly(['clicks']) && incoming().clicks == existing().clicks + 1)
+          || (isAdmin() && incoming().updatedAt == request.time)
+        );
+      allow delete: if isValidId(adId) && isAdmin();
+    }
+
+    // Custom Pages
+    match /pages/{pageId} {
+      allow get: if isValidId(pageId) && (resource.data.status == 'published' || isEditor());
+      allow list: if resource.data.status == 'published' || isEditor();
+      allow create: if isValidId(pageId)
+        && isEditor()
+        && isValidPage(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(pageId)
+        && isEditor()
+        && isValidPage(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(pageId) && isEditor();
+    }
+
+    // Reader Comments (Moderated, no PII)
+    match /comments/{commentId} {
+      allow get: if isValidId(commentId) && (resource.data.status == 'approved' || isEditor());
+      allow list: if resource.data.status == 'approved' || isEditor();
+      allow create: if isValidId(commentId)
+        && isValidComment(incoming())
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/news/$(incoming().newsId));
+      allow update: if isValidId(commentId)
+        && isEditor()
+        && isValidComment(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().newsId == existing().newsId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(commentId) && isEditor();
+    }
+
+    // Newsletter Subscribers (Strict PII Isolation)
+    match /newsletterSubscribers/{subscriberId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(subscriberId)
+        && isValidSubscriber(incoming())
+        && incoming().status == 'active'
+        && incoming().subscribedAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(subscriberId)
+        && isAdmin()
+        && isValidSubscriber(incoming())
+        && incoming().subscribedAt == existing().subscribedAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(subscriberId) && isAdmin();
+    }
+
+    // Analytics Events (Real traffic tracking)
+    match /analytics/{eventId} {
+      allow get, list: if isEditorialStaff();
+      allow create: if isValidId(eventId)
+        && isValidAnalyticsEvent(incoming())
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Activity Logs (Immutable Audit Trail)
+    match /activityLogs/{logId} {
+      allow get, list: if isEditorialStaff();
+      allow create: if isValidId(logId)
+        && isEditorialStaff()
+        && isValidActivityLog(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Contact Messages (Strict PII Isolation)
+    match /contactMessages/{messageId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(messageId)
+        && isValidContactMessage(incoming())
+        && incoming().status == 'new'
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(messageId)
+        && isAdmin()
+        && isValidContactMessage(incoming())
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+  }
+}
